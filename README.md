@@ -105,6 +105,10 @@ docker-compose up --build -d
     *   `GET /api/keys`: Returns Public Key.
     *   `POST /api/submit`: Accepts encrypted vote.
     *   `POST /api/tally`: Returns decrypted sum.
+*   **WASM Bindings**:
+    *   `encrypt_number(double)`: Encrypts value using loaded Public Key.
+    *   `get_context_info()`: Returns SEAL context details.
+    *   *Note: Decryption is not exposed to the client.*
 
 ---
 
