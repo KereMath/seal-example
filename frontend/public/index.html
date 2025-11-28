@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SEAL Homomorphic Encryption Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Homomorphic Addition</h1>
+        <p>Add two numbers without the server knowing what they are.</p>
+        
+        <div class="input-group">
+            <input type="number" id="num1" placeholder="Number 1">
+            <input type="number" id="num2" placeholder="Number 2">
+        </div>
+        
+        <button id="calcBtn" disabled>Loading WASM...</button>
+        
+        <div id="result" class="result"></div>
+        
+        <div class="logs">
+            <h3>Logs</h3>
+            <pre id="logOutput"></pre>
+        </div>
+    </div>
+
+    <script src="seal_wasm.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
