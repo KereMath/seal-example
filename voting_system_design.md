@@ -1,121 +1,72 @@
-# Advanced Secure Homomorphic E-Voting System Design
+# TEE-Based Secure Homomorphic E-Voting System Design
 
 ## 1. Executive Summary
-To achieve **"Full Cryptographic Security"** and ensure that **no single administrator or server** possesses the power to decrypt individual votes or rig the election, we must move beyond a single "Secret Key" model.
+This design leverages **Trusted Execution Environments (TEEs)**—specifically **Intel SGX** or **AWS Nitro Enclaves**—to create a "Black Box" Election Server.
 
-This design proposes a **Threshold Cryptography (Multiparty Computation)** architecture. In this model, the "Secret Key" is never generated as a single file. Instead, it is mathematically split among multiple **Guardians** (Trustees). The Election Server acts purely as an aggregator and **cannot decrypt anything** on its own.
+In this model, the **Election Server** runs inside a hardware-protected memory region (Enclave). Even the system administrator with root access **cannot read the memory** of the Enclave. This guarantees that the **Secret Key**, which is generated and held strictly inside the Enclave, remains secure.
 
-## 2. Core Security Philosophy
-1.  **No Single Point of Trust**: Neither the Admin, nor the Server, nor any single Guardian holds the full key.
-2.  **Privacy by Default**: Votes are encrypted on the client. Only the *final tally* is decrypted.
-3.  **Verifiability**: Any observer can verify the mathematical correctness of the tally (using Zero-Knowledge Proofs).
+## 2. Can I use Microsoft SEAL in a TEE?
+**YES.**
+*   **Compatibility**: Microsoft SEAL is a standard C++ library with no dependencies on system calls (filesystem, network) for its core arithmetic. It relies on standard C++ math libraries, which are fully supported in TEEs.
+*   **Performance**: Homomorphic encryption is CPU-intensive. Running it inside an SGX Enclave has a minor performance overhead (due to memory encryption/decryption paging), but it is fully functional and performant enough for voting aggregation.
 
----
+## 3. Do I need to write hardware-specific code?
+**It depends on your implementation strategy.** There are two paths:
 
-## 3. System Architecture: The "Threshold" Model
+### Path A: The "Native SDK" Route (Hard Mode)
+*   **How**: You use the **Intel SGX SDK** or **Open Enclave SDK**.
+*   **Code Changes**: You must split your C++ application into two parts:
+    1.  **Trusted Part (Enclave)**: Contains SEAL logic, Key Generation, and Tallying.
+    2.  **Untrusted Part (App)**: Handles Networking (Crow), File I/O, and calls the Trusted Part via "ECALLs".
+*   **Pros**: Smallest attack surface.
+*   **Cons**: Requires significant rewriting of your `server.cpp`. You cannot just "run" your existing Docker container.
 
-### 3.1. Entities
-1.  **Voter Clients (WASM)**: Encrypt votes using the **Joint Public Key**.
-2.  **Election Server (Aggregator)**:
-    *   Receives encrypted votes.
-    *   Performs Homomorphic Addition.
-    *   **Has NO decryption capability.**
-3.  **The Guardians (Trustees)**:
-    *   A group of $N$ entities (e.g., 3 officials, 1 auditor, 1 NGO).
-    *   They hold **Key Shares**.
-    *   A subset (Quorum $K$ of $N$) is required to decrypt the result.
-4.  **Admin Console**: Orchestrates the process (Start/Stop) but **never sees keys**.
-
----
-
-## 4. The Secure Pipeline (Step-by-Step)
-
-### Phase 1: The Key Ceremony (Election Setup)
-*Instead of the Server generating a key, the Guardians generate it together.*
-
-1.  **Admin** initiates "Election Setup".
-2.  **Election Server** signals the **Guardian Nodes**.
-3.  **Distributed Key Generation (DKG)**:
-    *   Each Guardian $G_i$ generates a random secret.
-    *   They exchange public commitments (mathematical promises).
-    *   **Result**:
-        *   A **Joint Public Key ($PK_{joint}$)** is created and published to the Election Server.
-        *   Each Guardian holds a **Secret Key Share ($SK_i$)**.
-        *   **CRITICAL**: The full Secret Key $SK$ **never exists** anywhere in memory or disk. It is virtual.
-
-### Phase 2: Voting & Aggregation (Automated)
-1.  **Voter** fetches $PK_{joint}$ from Server.
-2.  **Voter** encrypts vote: $C_{vote} = Encrypt(PK_{joint}, Vote)$.
-3.  **Voter** generates a **Zero-Knowledge Proof (ZKP)**:
-    *   Proves: "This ciphertext contains a valid vote (e.g., 1 for one candidate, 0 for others)" *without revealing the vote*.
-4.  **Election Server**:
-    *   Verifies the ZKP. (If invalid, reject vote).
-    *   Adds vote to tally: $C_{tally} = C_{tally} + C_{vote}$.
-    *   *Server sees only random noise.*
-
-### Phase 3: Distributed Decryption (Election End)
-*The Admin clicks "End Election". The Server cannot decrypt. It needs help.*
-
-1.  **Election Server** publishes the final $C_{tally}$.
-2.  **Admin** requests decryption from Guardians.
-3.  **Partial Decryption**:
-    *   Each Guardian $G_i$ downloads $C_{tally}$.
-    *   Each Guardian computes a **Partial Decryption Share ($D_i$)** using their $SK_i$.
-    *   $D_i$ is sent to the Election Server.
-4.  **Result Combination**:
-    *   The Election Server collects shares from at least $K$ Guardians.
-    *   It combines them (Lagrange Interpolation) to reveal the **Plaintext Tally**.
-5.  **Result**: The final counts are revealed. Individual votes remain encrypted forever.
+### Path B: The "LibOS" / Container Route (Recommended)
+*   **How**: You use a Library OS like **Gramine** (formerly Graphene) or **Occlum**, or **AWS Nitro Enclaves**.
+*   **Code Changes**: **Zero to Minimal.**
+    *   These tools allow you to run an **unmodified Docker container** or binary inside an Enclave.
+    *   The LibOS acts as a compatibility layer, translating system calls (like Network/File I/O) securely.
+*   **Pros**: You can use your existing `server.cpp` (Crow + SEAL) as is.
+*   **Cons**: Slightly larger Trusted Computing Base (TCB) than Path A, but acceptable for this use case.
 
 ---
 
-## 5. Alternative: The "Black Box" Server (TEE Model)
-*If you strictly want a single "Election Server" to handle everything automatically without external Guardians, you MUST use hardware protection.*
+## 4. System Architecture (TEE Model)
 
-### Architecture
-*   **Hardware**: Intel SGX (Software Guard Extensions) or AWS Nitro Enclaves.
-*   **Concept**: The code runs inside a memory-encrypted **Enclave**. Even the Admin with root access cannot read the Enclave's memory.
+### 4.1. The "Black Box" Server
+The Election Server is a Docker container running inside a TEE (e.g., via Gramine-SGX).
 
-### Pipeline
-1.  **Start**: Admin sends command.
-2.  **Enclave**: Generates $SK$ and $PK$ *inside* the protected memory.
-3.  **Voting**: Enclave receives votes, adds them.
-4.  **End**: Enclave decrypts the tally internally and outputs *only* the result.
-5.  **Security**: The $SK$ is destroyed when the Enclave terminates.
+1.  **Boot & Attestation**:
+    *   When the server starts, the TEE hardware generates a **Remote Attestation Quote**.
+    *   This is a cryptographic proof signed by the CPU manufacturer (e.g., Intel) proving: "I am a genuine SGX Enclave running *this specific code hash*."
+    *   Clients (or the Admin) verify this quote before trusting the server.
 
-**Pros**: Simpler architecture (no Guardians).
-**Cons**: Requires trusting the hardware vendor (Intel/AWS) and that the Enclave code is bug-free.
+2.  **Key Generation (Inside Enclave)**:
+    *   The `server.cpp` generates `SecretKey` and `PublicKey`.
+    *   **Crucial**: The `SecretKey` stays in RAM (encrypted by hardware). It is **never** written to disk.
+
+3.  **Voting Phase**:
+    *   Clients send encrypted votes via HTTPS (TLS terminates *inside* the Enclave for maximum security, or at the boundary).
+    *   Server adds votes to the in-memory Tally.
+
+4.  **Decryption Phase**:
+    *   Admin sends "End Election" command.
+    *   Server decrypts the result internally.
+    *   Server returns the **Plaintext Result**.
+    *   Server terminates and the `SecretKey` vanishes from memory.
 
 ---
 
-## 6. Recommended "Full Security" Design (Hybrid)
+## 5. Implementation Roadmap (LibOS Approach)
 
-For the highest security, combine **Threshold Cryptography** with **Homomorphic Encryption**.
+1.  **Develop Application**: Build your C++ Crow + SEAL application (Already done!).
+2.  **Containerize**: Package it in Docker (Already done!).
+3.  **Gramine Manifest**: Create a `manifest.sgx` file.
+    *   This file tells Gramine which files/libraries the app needs (e.g., `libseal.so`, `server` binary).
+4.  **Sign Enclave**: Use `gramine-sgx-sign` to generate the Enclave signature.
+5.  **Run**: Execute `gramine-sgx server`.
 
-### Where to implement what?
-
-| Component | Location | Tech Stack | Security Responsibility |
-| :--- | :--- | :--- | :--- |
-| **Client** | Browser | JS / WASM (SEAL) | **Encrypt** vote with $PK_{joint}$. Generate ZKP. |
-| **API Gateway** | Cloud | Nginx / Go | DDoS protection, Auth, Rate Limiting. |
-| **Election Server** | Cloud (Docker) | C++ (SEAL) | **Verify** ZKP. **Aggregate** votes. Store Encrypted Tally. |
-| **Guardian 1** | Admin's Laptop | C++ / Python | Holds Share 1. Participates in DKG & Decryption. |
-| **Guardian 2** | Auditor's Server | C++ / Python | Holds Share 2. |
-| **Guardian 3** | Offline USB | C++ / Python | Holds Share 3. |
-
-### The "Admin Experience"
-1.  Admin logs into **Admin Panel**.
-2.  Clicks **"Initialize Election"**.
-    *   System waits for Guardians to come online and perform DKG.
-    *   "Election Live" status appears.
-3.  Clicks **"End & Tally"**.
-    *   System sends request to Guardians.
-    *   Guardians approve/sign the decryption request.
-    *   Results appear on screen.
-
-## 7. Summary of Key Technologies
-
-1.  **Microsoft SEAL (BFV Scheme)**: For Homomorphic Addition of integer votes.
-2.  **Shamir's Secret Sharing / Threshold ElGamal**: For splitting the decryption key.
-3.  **Zero-Knowledge Proofs (Schnorr / Bulletproofs)**: To prevent "negative votes" or "over-voting" by malicious clients.
-4.  **Digital Signatures**: Every vote must be signed by the voter's private key (derived from their ID) to prevent tampering.
+## 6. Security Guarantees
+*   **Confidentiality**: Admin cannot dump RAM to find the Secret Key.
+*   **Integrity**: Admin cannot modify the code (e.g., to rig the tally) without changing the "Measurement Hash," which would fail Remote Attestation.
+*   **Privacy**: Since the Server is the only entity that *could* decrypt (but is constrained by code to only decrypt the *final tally*), individual voter privacy is preserved.
