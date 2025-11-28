@@ -1,0 +1,56 @@
+# Base Image: Gramine (Ubuntu 20.04 based)
+FROM gramineproject/gramine:v1.5
+
+# Prevent interactive prompts during build
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install Build Dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    libasio-dev \
+    wget \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Crow (C++ Microframework)
+RUN git clone https://github.com/CrowCpp/Crow.git /crow && cp -r /crow/include/* /usr/local/include/
+
+# Copy SEAL Submodule (Assuming it's in the context)
+COPY seal /seal
+
+# Build SEAL (Native Linux)
+WORKDIR /seal
+RUN cmake -S . -B build -DSEAL_BUILD_EXAMPLES=OFF -DSEAL_BUILD_TESTS=OFF -DSEAL_BUILD_BENCH=OFF .
+RUN cmake --build build
+RUN cmake --install build
+
+# Copy Backend Source
+WORKDIR /app
+COPY backend /app
+
+# Build Backend Server
+# Note: We build with -no-pie for simpler SGX config, though Gramine supports PIE.
+RUN cmake -S . -B build
+RUN cmake --build build
+RUN cp build/seal_server /app/server
+
+# Bundle Dependencies (Best Practice for Gramine)
+RUN mkdir -p /app/lib
+RUN ldd /app/server | grep "=> /" | awk '{print $3}' | xargs -I '{}' cp -v '{}' /app/lib/
+RUN cp /lib64/ld-linux-x86-64.so.2 /app/lib/
+
+# Generate Gramine Manifest & Sign Enclave
+# We use a dummy key for this demo. In production, use a secure key.
+RUN gramine-sgx-gen-private-key
+RUN gramine-manifest -Dlog_level=debug server.manifest.template server.manifest
+RUN gramine-sgx-sign --manifest server.manifest --output server.manifest.sgx
+
+# Expose Port
+EXPOSE 8080
+
+# Entrypoint: Run in SGX Enclave
+# Use "gramine-sgx server" for actual SGX hardware
+# Use "gramine-direct server" for simulation/testing without hardware
+CMD ["gramine-direct", "server"]

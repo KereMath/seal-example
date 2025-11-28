@@ -1,0 +1,37 @@
+# Gramine Manifest for SEAL Backend Server
+
+# 1. Loader & LibOS Configuration
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "/app/server"
+
+# 2. Environment Variables
+loader.log_level = "debug"
+loader.env.LD_LIBRARY_PATH = "/lib:/app/lib:/app"
+
+# 3. Filesystem Configuration
+fs.mounts = [
+  { path = "/lib", uri = "file:/app/lib" },
+  { path = "/app/server", uri = "file:/app/server" },
+  { path = "/etc", uri = "file:/etc" },
+]
+
+# 4. SGX Configuration
+sgx.debug = true
+sgx.nonpie_binary = true
+sgx.enclave_size = "2G"  # SEAL needs RAM!
+sgx.thread_num = 8
+
+# 5. Trusted Files (Measurement)
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:/app/server",
+  "file:/app/lib/",
+  "file:/etc/host.conf",
+  "file:/etc/hosts",
+  "file:/etc/nsswitch.conf",
+  "file:/etc/resolv.conf",
+]
+
+# 6. Network Configuration
+# Allow binding to port 8080
+sys.enable_extra_runtime_domain_names_conf = true
