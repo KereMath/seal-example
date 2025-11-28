@@ -1,32 +1,132 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SEAL Homomorphic Encryption Demo</title>
+    <title>🗳️ Secure Voting Demo - Homomorphic Encryption</title>
     <link rel="stylesheet" href="style.css">
+    <script src="/seal_wasm.js"></script>
 </head>
+
 <body>
     <div class="container">
-        <h1>Homomorphic Addition</h1>
-        <p>Add two numbers without the server knowing what they are.</p>
-        
-        <div class="input-group">
-            <input type="number" id="num1" placeholder="Number 1">
-            <input type="number" id="num2" placeholder="Number 2">
-        </div>
-        
-        <button id="calcBtn" disabled>Loading WASM...</button>
-        
-        <div id="result" class="result"></div>
-        
-        <div class="logs">
-            <h3>Logs</h3>
-            <pre id="logOutput"></pre>
-        </div>
-    </div>
+        <header>
+            <h1>🗳️ Secure Voting System</h1>
+            <p class="subtitle">Powered by Microsoft SEAL - Homomorphic Encryption</p>
+        </header>
 
-    <script src="seal_wasm.js"></script>
-    <script src="script.js"></script>
-</body>
-</html>
+        <div class="info-box">
+            <strong>🔐 Privacy Guarantee:</strong> Your inputs are encrypted <em>before</em> leaving your browser.
+            The server accumulates encrypted values without knowing their contents.
+        </div>
+
+        <div class="input-section">
+            <label for="numberInput">Enter a number:</label>
+            <div class="input-group">
+                <input type="number" id="numberInput" placeholder="e.g., 42" step="any">
+                <button id="submitBtn" onclick="submitNumber()" disabled>📤 Submit</button>
+            </div>
+        </div>
+
+        <div class="status-section">
+            <div class="stat-card">
+                <div class="stat-label">Submitted Values</div>
+                <div class="stat-value" id="voteCount">0</div>
+            </div>
+        </div>
+
+        <div class="tally-section">
+            <button id="tallyBtn" class="tally-button" onclick="showTally()" disabled>
+                🔓 Decrypt & Show Tally
+            </button>
+            <button id="resetBtn" class="reset-button" onclick="resetTally()" disabled>
+                🔄 Reset
+            </button>
+        </div>
+
+        <div class="result-section">
+            <div class="result-box" id="result">
+                Tally not yet revealed
+            </div>
+        </div>
+
+        <div class="log-section">
+            <h3>📋 Activity Log</h3>
+            <div class="log" id="log"></div>
+        </div>
+
+        <footer>
+            <p>
+                <!DOCTYPE html>
+                <html lang="en">
+
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>🗳️ Secure Voting Demo - Homomorphic Encryption</title>
+                    <link rel="stylesheet" href="style.css">
+                    <script src="seal_wasm.js"></script>
+                </head>
+
+                <body>
+                    <div class="container">
+                        <header>
+                            <h1>🗳️ Secure Voting System</h1>
+                            <p class="subtitle">Powered by Microsoft SEAL - Homomorphic Encryption</p>
+                        </header>
+
+                        <div class="info-box">
+                            <strong>🔐 Privacy Guarantee:</strong> Your inputs are encrypted <em>before</em> leaving
+                            your browser.
+                            The server accumulates encrypted values without knowing their contents.
+                        </div>
+
+                        <div class="input-section">
+                            <label for="numberInput">Enter a number:</label>
+                            <div class="input-group">
+                                <input type="number" id="numberInput" placeholder="e.g., 42" step="any">
+                                <button id="submitBtn" onclick="submitNumber()" disabled>📤 Submit</button>
+                            </div>
+                        </div>
+
+                        <div class="status-section">
+                            <div class="stat-card">
+                                <div class="stat-label">Submitted Values</div>
+                                <div class="stat-value" id="voteCount">0</div>
+                            </div>
+                        </div>
+
+                        <div class="tally-section">
+                            <button id="tallyBtn" class="tally-button" onclick="showTally()" disabled>
+                                🔓 Decrypt & Show Tally
+                            </button>
+                            <button id="resetBtn" class="reset-button" onclick="resetTally()" disabled>
+                                🔄 Reset
+                            </button>
+                        </div>
+
+                        <div class="result-section">
+                            <div class="result-box" id="result">
+                                Tally not yet revealed
+                            </div>
+                        </div>
+
+                        <div class="log-section">
+                            <h3>📋 Activity Log</h3>
+                            <div class="log" id="log"></div>
+                        </div>
+
+                        <footer>
+                            <p>
+                                <strong>How it works:</strong> Client encrypts → Server accumulates (without decrypting)
+                                →
+                                Server decrypts final sum on demand
+                            </p>
+                        </footer>
+                    </div>
+
+                    <script src="script.js?v=2"></script>
+                </body>
+
+                </html>

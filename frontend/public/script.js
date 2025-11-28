@@ -1,87 +1,134 @@
 let sealWrapper = null;
+let submittedCount = 0;
 
-function log(msg) {
-    const el = document.getElementById('logOutput');
-    el.textContent += msg + '\n';
-    console.log(msg);
+function log(message) {
+    const logDiv = document.getElementById('log');
+    const timestamp = new Date().toLocaleTimeString();
+    logDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+    logDiv.scrollTop = logDiv.scrollHeight;
 }
 
-// Initialize WASM Module
-SEAL().then(instance => {
-    log("WASM Module Loaded.");
-    sealWrapper = new instance.SEALWrapper();
-    log(sealWrapper.get_context_info());
-
-    const btn = document.getElementById('calcBtn');
-    btn.textContent = "Encrypt & Add";
-    btn.disabled = false;
-});
-
-document.getElementById('calcBtn').addEventListener('click', async () => {
-    if (!sealWrapper) return;
-
-    const n1 = parseInt(document.getElementById('num1').value);
-    const n2 = parseInt(document.getElementById('num2').value);
-
-    if (isNaN(n1) || isNaN(n2)) {
-        alert("Please enter valid numbers");
-        return;
-    }
-
+async function init() {
     try {
-        log(`Encrypting ${n1} and ${n2}...`);
+        log('Loading WASM module...');
 
-        // 1. Encrypt (Client Side)
-        // Note: The C++ binding returns raw binary string. We need to base64 encode it for JSON transport.
-        // However, passing raw binary strings from C++ to JS can be tricky with null bytes.
-        // A better way in bindings.cpp would be to return base64 directly or use Uint8Array.
-        // For this demo, let's assume the binding returns a string that we can btoa() but wait...
-        // Binary strings in JS are UTF-16. C++ std::string is bytes.
-        // Emscripten's std::string binding usually handles UTF-8.
-        // SEAL serialization is binary.
-        // FIX: I should have updated bindings.cpp to return Base64 or use memory views.
-        // Let's rely on the fact that I can modify bindings.cpp if this fails, 
-        // but actually, let's just try to treat the string as binary.
-        // Actually, `btoa` on a binary string works if the characters are 0-255.
-        // But Emscripten might try to decode UTF8.
+        // Initialize the WASM module using the factory function 'SEAL'
+        // defined by EXPORT_NAME="SEAL" and MODULARIZE=1 in Dockerfile
+        const moduleInstance = await SEAL();
 
-        // Let's assume for a moment I need to update bindings.cpp to be safe.
-        // But let's write the JS logic first assuming I'll fix bindings.cpp to return Base64.
+        log('Fetching Public Key from server...');
+        const response = await fetch('http://localhost:8080/api/keys');
+        const data = await response.json();
 
-        const c1 = sealWrapper.encrypt_number(n1); // Expecting Base64 from C++ would be safer
-        const c2 = sealWrapper.encrypt_number(n2);
+        log('Initializing SEAL with server Public Key...');
+        sealWrapper = new moduleInstance.SEALWrapper(data.publicKey);
 
-        log("Sending encrypted data to server...");
+        log('✅ SEAL initialized (encryption-only mode)');
+        log(sealWrapper.get_context_info());
 
-        // 2. Send to Server
-        const response = await fetch('http://localhost:8080/api/add', {
+        document.getElementById('submitBtn').disabled = false;
+        document.getElementById('tallyBtn').disabled = false;
+        document.getElementById('resetBtn').disabled = false;
+    } catch (error) {
+        log(`❌ Error: ${error.message}`);
+        console.error('Initialization error:', error);
+    }
+}
+
+async function submitNumber() {
+    try {
+        const input = document.getElementById('numberInput');
+        const num = parseFloat(input.value);
+
+        if (isNaN(num)) {
+            log('❌ Please enter a valid number');
+            return;
+        }
+
+        log(`Encrypting: ${num}...`);
+        const encrypted = sealWrapper.encrypt_number(num);
+
+        log('Sending encrypted value to server...');
+        const response = await fetch('http://localhost:8080/api/submit', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                cipher1: c1,
-                cipher2: c2
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cipher: encrypted })
+        });
+
+        const result = await response.json();
+        submittedCount = result.count;
+
+        document.getElementById('voteCount').textContent = submittedCount;
+        log(`✅ Submitted value #${submittedCount}`);
+
+        input.value = '';
+        input.focus();
+    } catch (error) {
+        log(`❌ Submission error: ${error.message}`);
+        console.error('Submit error:', error);
+    }
+}
+
+async function showTally() {
+    try {
+        log('Requesting tally from server...');
+        const response = await fetch('http://localhost:8080/api/tally', {
+            method: 'POST'
         });
 
         if (!response.ok) {
-            throw new Error(`Server Error: ${response.statusText}`);
+            const error = await response.text();
+            throw new Error(error);
         }
 
-        const data = await response.json();
-        const resultCipher = data.result;
+        const result = await response.json();
 
-        log("Received encrypted result.");
+        document.getElementById('result').innerHTML = `
+            <strong>Final Sum:</strong> ${result.sum.toFixed(2)}<br>
+            <small>From ${result.count} submissions</small>
+        `;
 
-        // 3. Decrypt (Client Side)
-        const result = sealWrapper.decrypt_number(resultCipher);
+        log(`🔓 Tally decrypted on server: ${result.sum.toFixed(2)}`);
+    } catch (error) {
+        log(`❌ Tally error: ${error.message}`);
+        console.error('Tally error:', error);
+    }
+}
 
-        document.getElementById('result').textContent = `Result: ${result}`;
-        log(`Decrypted Result: ${result}`);
+async function resetTally() {
+    try {
+        const confirmation = confirm('Are you sure you want to reset all submissions?');
+        if (!confirmation) return;
 
-    } catch (e) {
-        log(`Error: ${e.message}`);
-        console.error(e);
+        log('Resetting accumulator...');
+        const response = await fetch('http://localhost:8080/api/reset', {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        submittedCount = 0;
+        document.getElementById('voteCount').textContent = 0;
+        document.getElementById('result').textContent = 'Tally not yet revealed';
+
+        log('🔄 Accumulator reset successfully');
+    } catch (error) {
+        log(`❌ Reset error: ${error.message}`);
+        console.error('Reset error:', error);
+    }
+}
+
+// Enter key support
+document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('numberInput');
+    if (input) {
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                submitNumber();
+            }
+        });
     }
 });
+
+// Initialize on page load
+window.addEventListener('load', init);

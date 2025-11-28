@@ -5,6 +5,7 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <memory>
 
 using namespace seal;
 using namespace std;
@@ -111,57 +112,153 @@ struct CORSHandler {
     }
 };
 
-int main() {
-    crow::App<CORSHandler> app;
+// Global state for server-side key management
+static std::unique_ptr<SEALContext> global_context;
+static std::unique_ptr<KeyGenerator> global_keygen;
+static std::unique_ptr<SecretKey> global_secret_key;
+static std::unique_ptr<PublicKey> global_public_key;
+static std::unique_ptr<Evaluator> global_evaluator;
+static std::unique_ptr<CKKSEncoder> global_encoder;
+static std::unique_ptr<Decryptor> global_decryptor;
+static std::unique_ptr<Ciphertext> accumulated_tally;
+static int submission_count = 0;
+static double scale_global = pow(2.0, 40);
 
-    // SEAL Setup
-    std::cout << "Starting SEAL Server with CORS support (v5 - Fixes)..." << std::endl;
+void initialize_seal() {
+    std::cout << "🔑 Initializing SEAL with server-side key generation..." << std::endl;
+    
+    // SEAL Context Setup
     EncryptionParameters parms(scheme_type::ckks);
     size_t poly_modulus_degree = 32768;
     parms.set_poly_modulus_degree(poly_modulus_degree);
     parms.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {60, 60, 60, 60, 60, 60, 60}));
     
-    SEALContext context(parms);
-    Evaluator evaluator(context);
+    global_context = std::make_unique<SEALContext>(parms);
+    
+    // Generate Keys
+    global_keygen = std::make_unique<KeyGenerator>(*global_context);
+    global_secret_key = std::make_unique<SecretKey>(global_keygen->secret_key());
+    global_public_key = std::make_unique<PublicKey>();
+    global_keygen->create_public_key(*global_public_key);
+    
+    // Initialize tools
+    global_evaluator = std::make_unique<Evaluator>(*global_context);
+    global_encoder = std::make_unique<CKKSEncoder>(*global_context);
+    global_decryptor = std::make_unique<Decryptor>(*global_context, *global_secret_key);
+    
+    std::cout << "✅ Keys generated successfully. Secret Key is stored server-side." << std::endl;
+}
 
-    // Handle OPTIONS for preflight check
-    CROW_ROUTE(app, "/api/add").methods(crow::HTTPMethod::OPTIONS)([](const crow::request& req) {
+int main() {
+    crow::App<CORSHandler> app;
+
+    // Initialize SEAL on startup
+    initialize_seal();
+
+    // GET /api/keys - Returns Public Key only
+    CROW_ROUTE(app, "/api/keys").methods(crow::HTTPMethod::GET)([]() {
+        std::stringstream ss;
+        global_public_key->save(ss, compr_mode_type::none);
+        std::string pk_str = ss.str();
+        std::string pk_b64 = base64_encode(reinterpret_cast<const unsigned char*>(pk_str.c_str()), pk_str.length());
+        
+        crow::json::wvalue response;
+        response["publicKey"] = pk_b64;
+        return crow::response(response);
+    });
+
+    // Handle OPTIONS for /api/keys
+    CROW_ROUTE(app, "/api/keys").methods(crow::HTTPMethod::OPTIONS)([]() {
         return crow::response(204);
     });
 
-    CROW_ROUTE(app, "/api/add").methods(crow::HTTPMethod::POST)([&](const crow::request& req) {
+    // POST /api/submit - Accepts encrypted value, accumulates
+    CROW_ROUTE(app, "/api/submit").methods(crow::HTTPMethod::POST)([](const crow::request& req) {
         auto x = crow::json::load(req.body);
         if (!x) return crow::response(400, "Invalid JSON");
 
-        std::string cipher1_b64 = x["cipher1"].s();
-        std::string cipher2_b64 = x["cipher2"].s();
+        std::string cipher_b64 = x["cipher"].s();
+        std::string cipher_str = base64_decode(cipher_b64);
 
-        std::string cipher1_str = base64_decode(cipher1_b64);
-        std::string cipher2_str = base64_decode(cipher2_b64);
-
-        Ciphertext c1, c2, result;
-        std::stringstream ss1(cipher1_str);
-        std::stringstream ss2(cipher2_str);
-
+        Ciphertext new_cipher;
+        std::stringstream ss(cipher_str);
+        
         try {
-            c1.load(context, ss1);
-            c2.load(context, ss2);
+            new_cipher.load(*global_context, ss);
             
-            evaluator.add(c1, c2, result);
-
-            std::stringstream ss_res;
-            result.save(ss_res, compr_mode_type::none); // Disable compression
-            std::string res_str = ss_res.str();
-            std::string res_b64 = base64_encode(reinterpret_cast<const unsigned char*>(res_str.c_str()), res_str.length());
-
-            crow::json::wvalue res_json;
-            res_json["result"] = res_b64;
+            // Initialize accumulator on first submission
+            if (!accumulated_tally) {
+                accumulated_tally = std::make_unique<Ciphertext>(new_cipher);
+                submission_count = 1;
+            } else {
+                global_evaluator->add_inplace(*accumulated_tally, new_cipher);
+                submission_count++;
+            }
             
-            return crow::response(res_json);
+            crow::json::wvalue response;
+            response["status"] = "accepted";
+            response["count"] = submission_count;
+            
+            std::cout << "📥 Submission #" << submission_count << " accepted" << std::endl;
+            
+            return crow::response(response);
         } catch (std::exception& e) {
             return crow::response(500, e.what());
         }
     });
 
+    // Handle OPTIONS for /api/submit
+    CROW_ROUTE(app, "/api/submit").methods(crow::HTTPMethod::OPTIONS)([]() {
+        return crow::response(204);
+    });
+
+    // POST /api/tally - Decrypts and returns final sum
+    CROW_ROUTE(app, "/api/tally").methods(crow::HTTPMethod::POST)([]() {
+        if (!accumulated_tally) {
+            return crow::response(400, "No submissions yet");
+        }
+        
+        try {
+            Plaintext result_plain;
+            global_decryptor->decrypt(*accumulated_tally, result_plain);
+            
+            std::vector<double> values;
+            global_encoder->decode(result_plain, values);
+            
+            crow::json::wvalue response;
+            response["sum"] = values[0];  // First slot contains the sum
+            response["count"] = submission_count;
+            
+            std::cout << "🔓 Tally decrypted: " << values[0] << " (from " << submission_count << " submissions)" << std::endl;
+            
+            return crow::response(response);
+        } catch (std::exception& e) {
+            return crow::response(500, e.what());
+        }
+    });
+
+    // Handle OPTIONS for /api/tally
+    CROW_ROUTE(app, "/api/tally").methods(crow::HTTPMethod::OPTIONS)([]() {
+        return crow::response(204);
+    });
+
+    // POST /api/reset - Resets the accumulator
+    CROW_ROUTE(app, "/api/reset").methods(crow::HTTPMethod::POST)([]() {
+        accumulated_tally.reset();
+        submission_count = 0;
+        
+        std::cout << "🔄 Accumulator reset" << std::endl;
+        
+        crow::json::wvalue response;
+        response["status"] = "reset";
+        return crow::response(response);
+    });
+
+    // Handle OPTIONS for /api/reset
+    CROW_ROUTE(app, "/api/reset").methods(crow::HTTPMethod::OPTIONS)([]() {
+        return crow::response(204);
+    });
+
+    std::cout << "🚀 Server starting on port 8080..." << std::endl;
     app.port(8080).multithreaded().run();
 }

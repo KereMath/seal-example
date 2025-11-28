@@ -44,6 +44,7 @@ RUN emcc -O3 \
 FROM nginx:alpine
 
 COPY frontend/public /usr/share/nginx/html
+COPY frontend/public/favicon.ico /usr/share/nginx/html/
 COPY --from=builder /app/seal_wasm.js /usr/share/nginx/html/
 COPY --from=builder /app/seal_wasm.wasm /usr/share/nginx/html/
 
