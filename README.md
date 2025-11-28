@@ -5,15 +5,15 @@
 ![WebAssembly](https://img.shields.io/badge/WebAssembly-654FF0?style=for-the-badge&logo=webassembly&logoColor=white)
 ![C++](https://img.shields.io/badge/C++-00599C?style=for-the-badge&logo=c%2B%2B&logoColor=white)
 
-> **Privacy-First Computing:** Perform calculations on encrypted data without ever decrypting it.
+> **Privacy-Preserving Voting Demo:** Securely accumulate votes without revealing individual choices.
 
-This project demonstrates a secure **Homomorphic Encryption** system. A web client encrypts data locally, sends it to a server that performs computation (addition) on the encrypted values **without having the decryption key**, and returns the encrypted result to the client for decryption.
+This project demonstrates a **Homomorphic Encryption** voting system. The server manages the keys and accumulates encrypted votes. It can only decrypt the final aggregated tally, ensuring that individual submissions remain private during the accumulation process.
 
 ---
 
 ## 🏗️ System Architecture
 
-The following diagram illustrates the privacy-preserving data flow. **The server never sees the raw data.**
+The following diagram illustrates the actual data flow in this implementation.
 
 ```mermaid
 sequenceDiagram
@@ -21,24 +21,31 @@ sequenceDiagram
     participant B as Browser (WASM)
     participant S as Server (C++ SEAL)
 
-    Note over B: 1. Generate Keys (PK, SK)<br/>SK stays in browser!
-    U->>B: Enter Numbers (A, B)
-    Note over B: 2. Encrypt with PK<br/>E(A), E(B)
-    B->>S: POST /api/add { E(A), E(B) }
-    Note over S: 3. Homomorphic Add<br/>E(A) + E(B) = E(A+B)<br/>(No Decryption)
-    S-->>B: Return Result { E(A+B) }
-    Note over B: 4. Decrypt with SK<br/>Get A+B
-    B->>U: Display Result
+    Note over S: 1. Server Startup<br/>Generates PK & SK<br/>(SK stays on Server)
+    Note over B: 2. Client Init<br/>Fetches PK from Server
+    B->>S: GET /api/keys
+    S-->>B: Return Public Key (PK)
+    
+    U->>B: Enter Vote (Number)
+    Note over B: 3. Encrypt with PK<br/>E(Vote)
+    B->>S: POST /api/submit { E(Vote) }
+    Note over S: 4. Homomorphic Add<br/>Accumulator += E(Vote)<br/>(No Decryption yet)
+    S-->>B: Acknowledge
+
+    U->>B: Click "Show Tally"
+    B->>S: POST /api/tally
+    Note over S: 5. Decrypt Tally<br/>Uses SK to decrypt sum
+    S-->>B: Return Plaintext Result
+    B->>U: Display Final Sum
 ```
 
 ### Key Components
 
-| Component | Technology | Responsibility |
-| :--- | :--- | :--- |
-| **Frontend** | HTML5, JS, WebAssembly | **Trusted Environment.** Generates keys, encrypts inputs, decrypts results. |
-| **WASM Module** | Microsoft SEAL (C++) | Runs cryptographic primitives directly in the browser. |
-| **Backend** | C++17, Crow, SEAL | **Untrusted Environment.** Aggregates encrypted data blindly. |
-| **Docker** | Docker Compose | Orchestrates the isolated frontend and backend containers. |
+| Component | Responsibility |
+| :--- | :--- |
+| **Server (Backend)** | **Key Authority.** Generates and holds the Secret Key. Accumulates encrypted votes. Decrypts only the final result. |
+| **Client (Frontend)** | **Voter.** Fetches Public Key. Encrypts individual votes. Displays the final tally. |
+| **WASM Module** | Performs encryption in the browser using the server's Public Key. |
 
 ---
 
@@ -46,19 +53,15 @@ sequenceDiagram
 
 ```
 sealdockertrial/
-├── seal/                          # Microsoft SEAL library (submodule)
+├── seal/                          # Microsoft SEAL library
 ├── backend/
-│   ├── Dockerfile                 # C++ Server build
-│   ├── CMakeLists.txt             # Build configuration
-│   └── src/server.cpp             # REST API (Crow + SEAL)
+│   ├── src/server.cpp             # Generates Keys, Accumulates Votes, Decrypts Tally
+│   └── Dockerfile                 # C++ Server build
 ├── frontend/
-│   ├── Dockerfile                 # Emscripten -> Nginx build
-│   ├── wasm/bindings.cpp           # C++ -> WASM bindings
-│   └── public/
-│       ├── index.html             # User Interface
-│       ├── script.js              # Client-side logic
-│       └── favicon.ico            # App Icon
-├── docker-compose.yml             # Service orchestration
+│   ├── public/script.js           # Fetches PK, Encrypts Inputs
+│   ├── wasm/bindings.cpp          # WASM Bindings for SEAL
+│   └── Dockerfile                 # Frontend build
+├── docker-compose.yml             # Orchestration
 └── README.md                      # This documentation
 ```
 
@@ -66,76 +69,42 @@ sealdockertrial/
 
 ## 🚀 Quick Start
 
-### Prerequisites
-*   **Docker** & **Docker Compose**
-*   **Git**
-
-### Installation
+### Installation & Run
 
 ```bash
-# 1. Clone the repository
+# 1. Clone and Init
 git clone https://github.com/yourusername/sealdockertrial.git
 cd sealdockertrial
-
-# 2. Initialize SEAL submodule
 git submodule update --init --recursive
 
-# 3. Build and Run
+# 2. Build and Run
 docker-compose up --build -d
 ```
 
 ### Usage
 
-1.  Open **[http://localhost:3000](http://localhost:3000)** in your browser.
-2.  Open the **Developer Console** (F12) to see detailed logs.
-3.  Enter two numbers and click **Submit**.
-4.  Observe the logs:
-    *   `[Client]` Encrypts data.
-    *   `[Server]` Receives ciphertext, adds them, returns result.
-    *   `[Client]` Decrypts and displays the sum.
+1.  Go to **[http://localhost:3000](http://localhost:3000)**.
+2.  **Submit Votes**: Enter numbers and click Submit. The browser encrypts them and sends them to the server.
+3.  **Show Tally**: Click "Decrypt & Show Tally". The server decrypts the accumulated sum and returns it.
 
 ---
 
 ## 🔒 Security Model
 
-This system implements **Client-Side Encryption** with **Homomorphic Computation**.
-
-### 1. Zero-Knowledge Server
-The server possesses only the **Public Key**. It can perform arithmetic on ciphertexts but cannot decrypt them. The **Secret Key** is generated ephemerally in the user's browser and is never transmitted.
-
-### 2. Cryptographic Parameters (CKKS)
-We use the **CKKS scheme** for approximate arithmetic on real numbers.
-
-*   **Poly Modulus Degree**: `32768` (High security, ~128-bit)
-*   **Coeff Modulus**: `{60, 60, 60, 60, 60, 60, 60}`
-*   **Scale**: `2^40`
-*   **Compression**: `None` (Required for WASM compatibility)
+*   **Server-Side Key Management**: The server generates and holds the Secret Key.
+*   **Homomorphic Accumulation**: The server adds encrypted votes together without decrypting them individually.
+*   **Privacy**: Individual votes are never decrypted. Only the final aggregated sum is decrypted by the server upon request.
 
 ---
 
 ## 🛠️ Technical Details
 
-### Backend (`backend/src/server.cpp`)
-*   Uses **Crow** for a lightweight C++ REST API.
-*   Implements a global **CORS** handler to allow browser requests.
-*   Deserializes Base64 ciphertexts, performs `evaluator.add()`, and reserializes.
-
-### Frontend (`frontend/wasm/bindings.cpp`)
-*   Compiles C++ SEAL to WebAssembly using **Emscripten**.
-*   Exposes a clean JavaScript API:
-    *   `encrypt_number(double)`
-    *   `decrypt_number(string)`
-    *   `get_context_info()`
-
----
-
-## 🐛 Troubleshooting
-
-| Issue | Solution |
-| :--- | :--- |
-| **"Module is not defined"** | Ensure `seal_wasm.js` is loading. Rebuild frontend: `docker-compose up --build frontend` |
-| **Server Connection Refused** | Check backend logs: `docker logs sealdockertrial-backend-1`. Ensure port 8080 is free. |
-| **"SEALHeader is invalid"** | Compression mismatch. Both client and server must use `compr_mode_type::none`. |
+*   **Encryption Scheme**: CKKS (Approximate arithmetic).
+*   **Parameters**: Poly Modulus Degree 32768.
+*   **API**:
+    *   `GET /api/keys`: Returns Public Key.
+    *   `POST /api/submit`: Accepts encrypted vote.
+    *   `POST /api/tally`: Returns decrypted sum.
 
 ---
 
