@@ -25,41 +25,6 @@ This repository demonstrates a complete **Homomorphic Encryption** system using 
 - [Troubleshooting](#-troubleshooting)
 - [License](#-license)
 
----
-
-## 🏗️ Architecture Overview
-
-The system consists of three main components:
-
-```mermaid
-graph TB
-    subgraph Browser [Client: Browser]
-        UI[HTML/JS Interface]
-        WASM[SEAL WASM Module]
-    end
-    
-    subgraph Docker [Server: Docker Container]
-        Backend[C++ Backend<br/>Crow Framework]
-        SEAL[Microsoft SEAL<br/>Native Library]
-    end
-    
-    UI -->|User enters: 5, 10| WASM
-    WASM -->|1. Encrypt with PK| WASM
-    WASM -->|2. Send E(5), E(10)| Backend
-    Backend -->|3. Compute E(5)+E(10)| SEAL
-    SEAL -->|4. Return E(15)| Backend
-    Backend -->|5. Send E(15)| WASM
-    WASM -->|6. Decrypt with SK| WASM
-    WASM -->|7. Display: 15| UI
-    
-    style Browser fill:#e1f5ff,stroke:#0366d6,stroke-width:2px
-    style Docker fill:#fff3cd,stroke:#ffc107,stroke-width:2px
-```
-
-### Component Breakdown
-
-| Component | Technology | Purpose |
-|:----------|:-----------|:--------|
 | **Frontend** | HTML5, Vanilla JS, Emscripten | User interface and client-side encryption |
 | **WASM Module** | C++ (SEAL) compiled to WebAssembly | Cryptographic operations in browser |
 | **Backend** | C++17, Crow Microframework | REST API for homomorphic operations |
